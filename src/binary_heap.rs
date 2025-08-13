@@ -382,6 +382,7 @@ where
         if self.is_empty() {
             None
         } else {
+            // SAFETY: The heap cannot be empty because we just checked for that
             Some(unsafe { self.pop_unchecked() })
         }
     }
@@ -434,6 +435,7 @@ where
             return Err(item);
         }
 
+        // SAFETY: Getting here means that the heap is not yet full, so there will be capacity for at least one more item
         unsafe { self.push_unchecked(item) }
         Ok(())
     }
@@ -459,44 +461,67 @@ where
     pub unsafe fn push_unchecked(&mut self, item: T) {
         let old_len = self.len();
         self.data.push_unchecked(item);
+        // SAFETY: After `push_unchecked`, the index `old_len` is within the data slice
         self.sift_up(0, old_len);
     }
 
     /* Private API */
-    fn sift_down_to_bottom(&mut self, mut pos: usize) {
+
+    /// Sifts the element at index `pos` down to its correct location within the heap
+    ///
+    /// # Safety
+    ///
+    /// `pos` must be within the data slice
+    unsafe fn sift_down_to_bottom(&mut self, mut pos: usize) {
         let end = self.len();
         let start = pos;
-        unsafe {
-            let mut hole = Hole::new(self.data.as_mut_slice(), pos);
-            let mut child = 2 * pos + 1;
-            while child < end {
-                let right = child + 1;
-                // compare with the greater of the two children
-                if right < end && hole.get(child).cmp(hole.get(right)) != K::ordering() {
-                    child = right;
-                }
-                hole.move_to(child);
-                child = 2 * hole.pos() + 1;
+
+        let mut hole = Hole::new(self.data.as_mut_slice(), pos);
+        let mut child = 2 * pos + 1;
+        while child < end {
+            let right = child + 1;
+            // compare with the greater of the two children
+            if right < end && hole.get(child).cmp(hole.get(right)) != K::ordering() {
+                child = right;
             }
-            pos = hole.pos;
+            // SAFETY: The child index calculation ensures that `child` is always at least one larger than `hole.pos()`. The loop condition
+            //         guards against out-of-bounds accesses, so both safety guarantees of `hole.move_to` are met
+            hole.move_to(child);
+            child = 2 * hole.pos() + 1;
         }
+        pos = hole.pos;
+        // Fill the hole again with the initial element at `pos` to ensure there are no holes in the heap before moving the element to its
+        // final position
+        drop(hole);
+
+        // SAFETY: `start` is within the data slice due to the safety guarantee of `sift_down_to_bottom`. `pos` is reassigned with the last
+        //         valid hole position, which is always less than `end` due to the loop condition above. Therefore both safety guarantees
+        //         of `sift_up` are met
         self.sift_up(start, pos);
     }
 
-    fn sift_up(&mut self, start: usize, pos: usize) -> usize {
-        unsafe {
-            // Take out the value at `pos` and create a hole.
-            let mut hole = Hole::new(self.data.as_mut_slice(), pos);
+    /// Sifts the element at `pos` up to its correct index within the sub-tree of the heap starting from index `start`. If `start` >= `pos`, this
+    /// function does nothing.
+    ///
+    /// # Safety
+    ///
+    /// `start` and `pos` must be within the data slice
+    unsafe fn sift_up(&mut self, start: usize, pos: usize) -> usize {
+        // Take out the value at `pos` and create a hole.
+        // SAFETY: The safety guarantees of `sift_up` ensure that `pos` is within the data slice
+        let mut hole = Hole::new(self.data.as_mut_slice(), pos);
 
-            while hole.pos() > start {
-                let parent = (hole.pos() - 1) / 2;
-                if hole.element().cmp(hole.get(parent)) != K::ordering() {
-                    break;
-                }
-                hole.move_to(parent);
+        while hole.pos() > start {
+            let parent = (hole.pos() - 1) / 2;
+            if hole.element().cmp(hole.get(parent)) != K::ordering() {
+                break;
             }
-            hole.pos()
+            // SAFETY: The parent index calculation ensures that `parent` is always at least one less than `hole.pos()`. The only edge case
+            //         is if `hole.pos() == 0`, which would underflow the calculation, but this case is checked by the loop condition. Therefore
+            //         both safety guarantees of `hole.move_to` are met
+            hole.move_to(parent);
         }
+        hole.pos()
     }
 }
 
@@ -599,7 +624,10 @@ where
 {
     fn drop(&mut self) {
         if self.sift {
-            self.heap.sift_down_to_bottom(0);
+            unsafe {
+                // SAFETY: PeekMut is only instantiated for non-empty heaps, so index `0` is always within the data slice
+                self.heap.sift_down_to_bottom(0);
+            }
         }
     }
 }
@@ -651,6 +679,16 @@ impl<T> Drop for Hole<'_, T> {
         // fill the hole again
         unsafe {
             let pos = self.pos;
+            // SAFETY `get_unchecked_mut`: The `Hole` API enforces that `self.pos` is always within the data slice, so an unchecked index operation
+            //                             is valid
+            // SAFETY `ptr::write`: Alignment rules for the `dst` pointer are upheld because we convert from a `&mut T` to a `*mut T` and the borrow
+            //                      comes from the underlying data slice, so is properly aligned.
+            //                      The validity rules are harder to check because they are not well-defined yet (see: https://doc.rust-lang.org/std/ptr/index.html#safety)
+            //                      We can assume that since `get_unchecked_mut` correctly accesses the element in the data slice, we get a writeable
+            //                      pointer for `T`. Since `Hole` mutably borrows the data slice, we can also safely assume that we have unique access
+            //                      to that memory location
+            // SAFETY `ptr::read`: `self.elt` always contains a valid value of type `T`, so reading from that through a pointer is always safe. The
+            //                      validity of `self.elt` is enforced by the safety guarantees of `Hole::new`
             ptr::write(self.data.get_unchecked_mut(pos), ptr::read(&*self.elt));
         }
     }
