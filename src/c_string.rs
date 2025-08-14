@@ -60,6 +60,7 @@ impl<const N: usize, LenT: LenType> CString<N, LenT> {
     ///
     /// ```rust
     /// use heapless::CString;
+    /// // SAFETY: The byte string is nul-terminated and contains no interior nul bytes
     /// let mut c_string = unsafe { CString::<7>::from_bytes_with_nul_unchecked(b"string\0").unwrap() };
     ///
     /// assert_eq!(c_string.to_str(), Ok("string"));
@@ -107,6 +108,7 @@ impl<const N: usize, LenT: LenType> CString<N, LenT> {
     ///     BYTES.as_ptr().cast()
     /// };
     ///
+    /// // SAFETY: HELLO_PTR points to a valid byte array that is properly nul-terminated
     /// let copied = unsafe { CString::<14>::from_raw(HELLO_PTR) }.unwrap();
     ///
     /// assert_eq!(copied.to_str(), Ok("Hello, world!"));
@@ -119,6 +121,9 @@ impl<const N: usize, LenT: LenType> CString<N, LenT> {
     /// Converts the [`CString`] to a [`CStr`] slice.
     #[inline]
     pub fn as_c_str(&self) -> &CStr {
+        // SAFETY: Given that the API for constructing a `CString` correctly enforces all invariants (nul-terminated
+        //         string without any interior nul-bytes), the inner buffer contains a byte sequence that is also a
+        //         valid `CStr`
         unsafe { CStr::from_bytes_with_nul_unchecked(&self.inner) }
     }
 
@@ -173,7 +178,7 @@ impl<const N: usize, LenT: LenType> CString<N, LenT> {
 
         match CStr::from_bytes_with_nul(bytes) {
             Ok(_) => {
-                // SAFETY: A string is left in a valid state because appended bytes are nul-terminated.
+                // SAFETY: The string is left in a valid state because appended bytes are nul-terminated.
                 unsafe { self.extend_from_bytes_unchecked(bytes) }?;
 
                 Ok(())
@@ -182,7 +187,7 @@ impl<const N: usize, LenT: LenType> CString<N, LenT> {
                 Err(ExtendError::InteriorNul { position })
             }
             Err(FromBytesWithNulError::NotNulTerminated) => {
-                // Because given bytes has no nul byte anywhere, we insert the bytes and
+                // Because the given bytes have no nul byte anywhere, we insert the bytes and
                 // then add the nul byte terminator.
                 //
                 // We've ensured above that we have enough space left to insert these bytes,
