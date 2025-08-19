@@ -233,7 +233,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
 
     /// Clears the deque, removing all values.
     pub fn clear(&mut self) {
-        // safety: we're immediately setting a consistent empty state.
+        // SAFETY: we're immediately setting a consistent empty state.
         unsafe { self.drop_contents() }
         self.front = 0;
         self.back = 0;
@@ -242,7 +242,10 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
 
     /// Drop all items in the `Deque`, leaving the state `back/front/full` unmodified.
     ///
-    /// safety: leaves the `Deque` in an inconsistent state, so can cause duplicate drops.
+    /// # Safety
+    ///
+    /// Leaves the `Deque` in an inconsistent state, so can cause duplicate drops. The caller must ensure
+    /// that the `Deque` is set to a consistent state again before it is dropped
     unsafe fn drop_contents(&mut self) {
         // We drop each element used in the deque by turning into a &mut[T]
         let (a, b) = self.as_mut_slices();
@@ -263,10 +266,17 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     /// Returns a pair of slices which contain, in order, the contents of the `Deque`.
     pub fn as_slices(&self) -> (&[T], &[T]) {
         // NOTE(unsafe) avoid bound checks in the slicing operation
-        unsafe {
-            if self.is_empty() {
-                (&[], &[])
-            } else if self.back <= self.front {
+        if self.is_empty() {
+            (&[], &[])
+        } else if self.back <= self.front {
+            // We have elements at the front and at the back
+            // SAFETY `ptr.add`: `self.front` is always less than the capacity of the storage, so the computed pointer stays within
+            //                   the bounds of the allocation (`self.buffer`). This is safe
+            // SAFETY `from_raw_parts`: The resulting pointer is within the buffer, and the length will be <= `self.storage_capacity`,
+            //                          so the parameters for the slice are valid. The elements within the slice are also properly
+            //                          initialized because we decrement `self.front` only if we push an element to the front
+            //                          By the same logic, the second call to `from_raw_parts` is also safe
+            unsafe {
                 (
                     slice::from_raw_parts(
                         self.buffer.borrow().as_ptr().add(self.front).cast::<T>(),
@@ -274,7 +284,15 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
                     ),
                     slice::from_raw_parts(self.buffer.borrow().as_ptr().cast::<T>(), self.back),
                 )
-            } else {
+            }
+        } else {
+            // Two cases: Either we only have elements at the back (`self.front == 0`), or the deque has been compacted through
+            // `make_contiguous`. In both cases, the elements start at `self.front` and go up to `self.back`
+            // SAFETY: The result of `ptr.add` is within the buffer for the same reason as in the previous `else if` case. The length
+            //         calculation can never underflow, and since both `self.back` and `self.front` are always less than the capacity
+            //         of the storage, the resulting length stays within the buffer. In both possible cases of hitting this branch,
+            //         all elements up to `self.back` are also properly initialized
+            unsafe {
                 (
                     slice::from_raw_parts(
                         self.buffer.borrow().as_ptr().add(self.front).cast::<T>(),
@@ -291,10 +309,11 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         let ptr = self.buffer.borrow_mut().as_mut_ptr();
 
         // NOTE(unsafe) avoid bound checks in the slicing operation
-        unsafe {
-            if self.is_empty() {
-                (&mut [], &mut [])
-            } else if self.back <= self.front {
+        if self.is_empty() {
+            (&mut [], &mut [])
+        } else if self.back <= self.front {
+            // SAFETY: See `as_slices`
+            unsafe {
                 (
                     slice::from_raw_parts_mut(
                         ptr.add(self.front).cast::<T>(),
@@ -302,7 +321,10 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
                     ),
                     slice::from_raw_parts_mut(ptr.cast::<T>(), self.back),
                 )
-            } else {
+            }
+        } else {
+            // SAFETY: See `as_slices`
+            unsafe {
                 (
                     slice::from_raw_parts_mut(
                         ptr.add(self.front).cast::<T>(),
@@ -351,6 +373,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     /// ```
     pub fn make_contiguous(&mut self) -> &mut [T] {
         if self.is_contiguous() {
+            // SAFETY: All elements start at `self.front` and we just checked that they are also contiguous. For a more detailed
+            //         explanation, see the last branch in `as_slices`
             return unsafe {
                 slice::from_raw_parts_mut(
                     self.buffer.borrow_mut().as_mut_ptr().add(self.front).cast(),
@@ -375,6 +399,12 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
             //
             // from: DEFGH....ABC
             // to:   ABCDEFGH....
+
+            // SAFETY: Assuming algorithmic correctness (verified by tests), there are no out-of-bounds pointers and the second
+            //         copy contains non-overlapping regions. Pointer alignment is correct as the pointers come from the underlying
+            //         buffer which stores sequential Ts.
+            //         The only exotic requirement is that reads to `src` do not invalidate the `dst` pointer, which doesn't happen
+            //         if both pointers come from the same contiguous underlying storage, as is the case here (TODO_SAFETY not so sure about this...)
             unsafe {
                 ptr::copy(buffer_ptr, buffer_ptr.add(front_len), back_len);
                 // ...DEFGH.ABC
@@ -391,6 +421,9 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
             //
             // from: FGH....ABCDE
             // to:   ...ABCDEFGH.
+
+            // SAFETY: As in the previous branch, assuming algorithmic correctness, this code is safe as nothing overlaps that
+            //         shouldn't and all pointers point to valid memory regions within the underlying buffer
             unsafe {
                 ptr::copy(
                     buffer_ptr.add(self.front),
@@ -431,66 +464,70 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
                 //  1. copy tail forwards
                 //  2. rotate used part of the buffer
                 //  3. update head to point to the new beginning (which is just `free`)
-                unsafe {
-                    // if there is no free space in the buffer, then the slices are already
-                    // right next to each other and we don't need to move any memory.
-                    if free != 0 {
-                        // because we only move the tail forward as much as there's free space
-                        // behind it, we don't overwrite any elements of the head slice, and
-                        // the slices end up right next to each other.
+
+                // if there is no free space in the buffer, then the slices are already
+                // right next to each other and we don't need to move any memory.
+                if free != 0 {
+                    // SAFETY: because we only move the tail forward as much as there's free space
+                    // behind it, we don't overwrite any elements of the head slice, and
+                    // the slices end up right next to each other. As the pointers come from the underlying
+                    // buffer, they are also valid for both reads and writes
+                    unsafe {
                         ptr::copy(buffer_ptr, buffer_ptr.add(free), back_len);
                     }
-
-                    // We just copied the tail right next to the head slice,
-                    // so all of the elements in the range are initialized
-                    let slice: &mut [T] = slice::from_raw_parts_mut(
-                        buffer_ptr.add(free),
-                        self.storage_capacity() - free,
-                    );
-
-                    // because the deque wasn't contiguous, we know that `tail_len < self.len == slice.len()`,
-                    // so this will never panic.
-                    slice.rotate_left(back_len);
-
-                    // the used part of the buffer now is `free..self.capacity()`, so set
-                    // `head` to the beginning of that range.
-                    self.front = free;
-                    self.back = 0;
                 }
+
+                // SAFETY: We just copied the tail right next to the head slice,
+                // so all of the elements in the range are initialized
+                let slice: &mut [T] = unsafe {
+                    slice::from_raw_parts_mut(buffer_ptr.add(free), self.storage_capacity() - free)
+                };
+
+                // because the deque wasn't contiguous, we know that `tail_len < self.len == slice.len()`,
+                // so this will never panic.
+                slice.rotate_left(back_len);
+
+                // the used part of the buffer now is `free..self.capacity()`, so set
+                // `head` to the beginning of that range.
+                self.front = free;
+                self.back = 0;
             } else {
                 // head is shorter so:
                 //  1. copy head backwards
                 //  2. rotate used part of the buffer
                 //  3. update head to point to the new beginning (which is the beginning of the buffer)
 
-                unsafe {
-                    // if there is no free space in the buffer, then the slices are already
-                    // right next to each other and we don't need to move any memory.
-                    if free != 0 {
-                        // copy the head slice to lie right behind the tail slice.
+                // if there is no free space in the buffer, then the slices are already
+                // right next to each other and we don't need to move any memory.
+                if free != 0 {
+                    // copy the head slice to lie right behind the tail slice.
+                    // SAFETY: Both pointers are within the underlying buffer and are valid for reads and writes
+                    unsafe {
                         ptr::copy(
                             buffer_ptr.add(self.front),
                             buffer_ptr.add(back_len),
                             front_len,
                         );
                     }
-
-                    // because we copied the head slice so that both slices lie right
-                    // next to each other, all the elements in the range are initialized.
-                    let slice: &mut [T] = slice::from_raw_parts_mut(buffer_ptr, len);
-
-                    // because the deque wasn't contiguous, we know that `head_len < self.len == slice.len()`
-                    // so this will never panic.
-                    slice.rotate_right(front_len);
-
-                    // the used part of the buffer now is `0..self.len`, so set
-                    // `head` to the beginning of that range.
-                    self.front = 0;
-                    self.back = len;
                 }
+
+                // SAFETY: Because we copied the head slice so that both slices lie right
+                // next to each other, all the elements in the range are initialized.
+                let slice: &mut [T] = unsafe { slice::from_raw_parts_mut(buffer_ptr, len) };
+
+                // because the deque wasn't contiguous, we know that `head_len < self.len == slice.len()`
+                // so this will never panic.
+                slice.rotate_right(front_len);
+
+                // the used part of the buffer now is `0..self.len`, so set
+                // `head` to the beginning of that range.
+                self.front = 0;
+                self.back = len;
             }
         }
 
+        // SAFETY: At the end of this algorithm, all elements are in a contiguous slice starting from `self.front`. This makes
+        //         it safe to create a slice from a pointer into the underlying buffer starting at `self.front` and `len` elements
         unsafe { slice::from_raw_parts_mut(buffer_ptr.add(self.front), len) }
     }
 
@@ -499,6 +536,11 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         if self.is_empty() {
             None
         } else {
+            // SAFETY: We checked that there is indeed a front element. We also know that `self.front` is always within the underlying
+            //         buffer, so `get_unchecked` is safe. Note that even if we never pushed an element to the front, this code is
+            //         still valid, as `self.front` starts out at 0, `push_back` puts elements at the start of the buffer, so the first
+            //         back element will sit at index 0 and is therefore also the front element. If `self.front` is non-zero, it means we
+            //         called `push_front` at some point
             Some(unsafe { &*self.buffer.borrow().get_unchecked(self.front).as_ptr() })
         }
     }
@@ -508,6 +550,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         if self.is_empty() {
             None
         } else {
+            // SAFETY: See `front` method
             Some(unsafe {
                 &mut *self
                     .buffer
@@ -524,6 +567,10 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
             None
         } else {
             let index = self.decrement(self.back);
+            // SAFETY: `self.back` always points to the next *free* slot for a back element. By decrementing, we either get the last non-free
+            //         back element, or (if there is no back element) we wrap around to the index of the oldest front element, which is therefore
+            //         the back element. `self.decrement` guarantees that the returned index is always within the bounds of the underlying buffer,
+            //         so `get_unchecked` is safe
             Some(unsafe { &*self.buffer.borrow().get_unchecked(index).as_ptr() })
         }
     }
@@ -534,6 +581,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
             None
         } else {
             let index = self.decrement(self.back);
+            // SAFETY: See `back` method
             Some(unsafe {
                 &mut *self
                     .buffer
@@ -549,6 +597,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         if self.is_empty() {
             None
         } else {
+            // SAFETY: The deque is not empty
             Some(unsafe { self.pop_front_unchecked() })
         }
     }
@@ -558,6 +607,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         if self.is_empty() {
             None
         } else {
+            // SAFETY: The deque is not empty
             Some(unsafe { self.pop_back_unchecked() })
         }
     }
@@ -569,6 +619,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         if self.is_full() {
             Err(item)
         } else {
+            // SAFETY: The deque is not full
             unsafe { self.push_front_unchecked(item) }
             Ok(())
         }
@@ -581,6 +632,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         if self.is_full() {
             Err(item)
         } else {
+            // SAFETY: The deque is not full
             unsafe { self.push_back_unchecked(item) }
             Ok(())
         }
@@ -598,6 +650,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         let index = self.front;
         self.full = false;
         self.front = self.increment(self.front);
+        // SAFETY: `self.increment` guarantees that the return value is always an index within the bounds of the underlying buffer, so long
+        //         as `self.front` is always <= `self.capacity()`. The public API of `DequeInner` ensures that this property always holds
         self.buffer
             .borrow_mut()
             .get_unchecked_mut(index)
@@ -616,6 +670,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
 
         self.full = false;
         self.back = self.decrement(self.back);
+        // SAFETY: `self.decrement` guarantees that the return value is always an index within the bounds of the underlying buffer, so long
+        //         as `self.back` is always <= `self.capacity()`. The public API of `DequeInner` ensures that this property always holds
         self.buffer
             .borrow_mut()
             .get_unchecked_mut(self.back)
@@ -634,6 +690,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         let index = self.decrement(self.front);
         // NOTE: the memory slot that we are about to write to is uninitialized. We assign
         // a `MaybeUninit` to avoid running `T`'s destructor on the uninitialized memory
+        // SAFETY: `self.decrement` guarantees that the return value is always an index within the bounds of the underlying buffer, so long
+        //         as `self.front` is always <= `self.capacity()`. The public API of `DequeInner` ensures that this property always holds
         *self.buffer.borrow_mut().get_unchecked_mut(index) = MaybeUninit::new(item);
         self.front = index;
         if self.front == self.back {
@@ -651,6 +709,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
 
         // NOTE: the memory slot that we are about to write to is uninitialized. We assign
         // a `MaybeUninit` to avoid running `T`'s destructor on the uninitialized memory
+        // SAFETY: `self.back` is always within the bounds of the underlying buffer
         *self.buffer.borrow_mut().get_unchecked_mut(self.back) = MaybeUninit::new(item);
         self.back = self.increment(self.back);
         if self.front == self.back {
@@ -664,6 +723,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.storage_len() {
             let idx = self.to_physical_index(index);
+            // SAFETY: `to_physical_index` always returns an index within the bounds of the underlying buffer
             Some(unsafe { self.buffer.borrow().get_unchecked(idx).assume_init_ref() })
         } else {
             None
@@ -676,6 +736,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index < self.storage_len() {
             let idx = self.to_physical_index(index);
+            // SAFETY: `to_physical_index` always returns an index within the bounds of the underlying buffer
             Some(unsafe {
                 self.buffer
                     .borrow_mut()
@@ -696,6 +757,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         debug_assert!(index < self.storage_len());
 
         let idx = self.to_physical_index(index);
+        // SAFETY: `to_physical_index` always returns an index within the bounds of the underlying buffer
         self.buffer.borrow().get_unchecked(idx).assume_init_ref()
     }
 
@@ -708,6 +770,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         debug_assert!(index < self.storage_len());
 
         let idx = self.to_physical_index(index);
+        // SAFETY: `to_physical_index` always returns an index within the bounds of the underlying buffer
         self.buffer
             .borrow_mut()
             .get_unchecked_mut(idx)
@@ -723,6 +786,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
         let len = self.storage_len();
         assert!(i < len);
         assert!(j < len);
+        // SAFETY: The asserts guarantee that both i and j are valid indices
         unsafe { self.swap_unchecked(i, j) }
     }
 
@@ -739,8 +803,12 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
 
         let buffer = self.buffer.borrow_mut();
         let buffer_ptr = buffer.as_mut_ptr();
+        // SAFETY: Both indices are within the bounds of the underlying buffer, which itself is contiguous, making it safe to call `ptr::add`
         let ptr_i = buffer_ptr.add(idx_i);
         let ptr_j = buffer_ptr.add(idx_j);
+        // SAFETY: Both pointers are valid for reads and writes. Since they come from the same contiguous buffer, there is no way for reads to
+        //         one pointer to invalidate the other pointer. The pointers are also correctly aligned as the underlying buffer stores elements
+        //         of type `T`
         ptr::swap(ptr_i, ptr_j);
     }
 
@@ -755,6 +823,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     pub fn swap_remove_front(&mut self, index: usize) -> Option<T> {
         let len = self.storage_len();
         if len > 0 && index < len {
+            // SAFETY `swap_unchecked`: Both indices are within the bounds of the underlying buffer, checked by the surrounding if statement
+            // SAFETY `pop_front_unchecked`: Since we check for `len > 0`, we know the deque is not empty, so it is safe to pop the front element
             Some(unsafe {
                 self.swap_unchecked(index, 0);
                 self.pop_front_unchecked()
@@ -775,6 +845,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     pub fn swap_remove_back(&mut self, index: usize) -> Option<T> {
         let len = self.storage_len();
         if len > 0 && index < len {
+            // SAFETY `swap_unchecked`: Both indices are within the bounds of the underlying buffer, checked by the surrounding if statement
+            // SAFETY `pop_back_unchecked`: Since we check for `len > 0`, we know the deque is not empty, so it is safe to pop the back element
             Some(unsafe {
                 self.swap_unchecked(index, len - 1);
                 self.pop_back_unchecked()
@@ -874,7 +946,7 @@ impl<T, const N: usize> Default for Deque<T, N> {
 
 impl<T, S: VecStorage<T> + ?Sized> Drop for DequeInner<T, S> {
     fn drop(&mut self) {
-        // safety: `self` is left in an inconsistent state but it doesn't matter since
+        // SAFETY: `self` is left in an inconsistent state but it doesn't matter since
         // it's getting dropped. Nothing should be able to observe `self` after drop.
         unsafe { self.drop_contents() }
     }
@@ -949,7 +1021,7 @@ where
     fn clone(&self) -> Self {
         let mut res = Self::new();
         for i in self {
-            // safety: the original and new deques have the same capacity, so it can
+            // SAFETY: the original and new deques have the same capacity, so it can
             // not become full.
             unsafe { res.push_back_unchecked(i.clone()) }
         }
