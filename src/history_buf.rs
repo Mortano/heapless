@@ -314,7 +314,7 @@ impl<T: Copy, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
 impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// Clears the buffer
     pub fn clear(&mut self) {
-        // SAFETY: we reset the values just after
+        // SAFETY: We reset the length of the buffer just after. This leaves the buffer in the same state as if we had called `Self::new`
         unsafe { self.drop_contents() };
         self.write_at = 0;
         self.filled = false;
@@ -322,7 +322,16 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
 }
 
 impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
+    /// Drops all elements in this buffer in-place, leaving their memory in an uninitialized state
+    ///
+    /// # Safety
+    ///
+    /// This leaves the elements up to `self.len()` in an uninitialized state, so the caller has to ensure that the values are not
+    /// read again before they are properly reinitialized
     unsafe fn drop_contents(&mut self) {
+        // SAFETY `ptr::slice_from_raw_parts_mut`: Slice data comes from the underlying buffer, `self.len()` is <= buffer capacity
+        // SAFETY `ptr::drop_in_place`: We have `self.len()` initialized values in the slice, these are safe to drop. We are also the
+        //                              unique owner of the slice and the contained elements
         unsafe {
             ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
                 self.data.borrow_mut().as_mut_ptr().cast::<T>(),
@@ -373,6 +382,8 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     pub fn write(&mut self, t: T) {
         if self.filled {
             // Drop the old before we overwrite it.
+            // SAFETY: Since the buffer is filled, we are guaranteed to have an initialized element as `self.write_at`. Since we immediately overwrite
+            //         this value, the whole function remains safe
             unsafe { ptr::drop_in_place(self.data.borrow_mut()[self.write_at].as_mut_ptr()) }
         }
         self.data.borrow_mut()[self.write_at] = MaybeUninit::new(t);
@@ -480,6 +491,7 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// Returns the array slice backing the buffer, without keeping track
     /// of the write position. Therefore, the element order is unspecified.
     pub fn as_slice(&self) -> &[T] {
+        // SAFETY: The pointer comes from the underlying buffer, of which we know that it has `self.len()` properly initialized elements
         unsafe { slice::from_raw_parts(self.data.borrow().as_ptr().cast(), self.len()) }
     }
 
@@ -568,6 +580,7 @@ where
 
 impl<T, S: HistoryBufStorage<T> + ?Sized> Drop for HistoryBufInner<T, S> {
     fn drop(&mut self) {
+        // SAFETY: The elements will be left in an uninitialized state, but there should be no safe way to access `self` after it was dropped
         unsafe { self.drop_contents() }
     }
 }
