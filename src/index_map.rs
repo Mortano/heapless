@@ -100,6 +100,7 @@ impl Pos {
     fn new(index: usize, hash: HashValue) -> Self {
         Self {
             nz: unsafe {
+                // TODO This is not safe as it can overflow if index and hash are both 0xffff! See https://github.com/rust-embedded/heapless/issues/579
                 NonZeroU32::new_unchecked(
                     ((u32::from(hash.0) << 16) + index as u32).wrapping_add(1),
                 )
@@ -185,6 +186,7 @@ where
                     // give up when probe distance is too long
                     return None;
                 } else if entry_hash == hash
+                // SAFETY: Each `Pos` record points to a valid index in `self.entries`
                     && unsafe { self.entries.get_unchecked(i).key.borrow() == query }
                 {
                     return Some((probe, i));
@@ -218,17 +220,20 @@ where
                     }
                     // robin hood: steal the spot if it's better for us
                     let index = self.entries.len();
+                    // SAFETY: We checked that there is space left in the `entries` vec
                     unsafe { self.entries.push_unchecked(Bucket { hash, key, value }) };
                     Self::insert_phase_2(&mut self.indices, probe, Pos::new(index, hash));
                     return Insert::Success(Inserted {
                         index,
                         old_value: None,
                     });
+                    // SAFETY: Index `i` will be within `self.entries`. Tests and the debug assert above would catch if it weren't
                 } else if entry_hash == hash && unsafe { self.entries.get_unchecked(i).key == key }
                 {
                     return Insert::Success(Inserted {
                         index: i,
                         old_value: Some(mem::replace(
+                            // SAFETY: See comment above
                             unsafe { &mut self.entries.get_unchecked_mut(i).value },
                             value,
                         )),
@@ -241,6 +246,7 @@ where
                 // empty bucket, insert here
                 let index = self.entries.len();
                 *pos = Some(Pos::new(index, hash));
+                // SAFETY: We checked that there is space left in the `entries` vec
                 unsafe { self.entries.push_unchecked(Bucket { hash, key, value }) };
                 return Insert::Success(Inserted {
                     index,
@@ -254,6 +260,7 @@ where
     // phase 2 is post-insert where we forward-shift `Pos` in the indices.
     fn insert_phase_2(indices: &mut [Option<Pos>; N], mut probe: usize, mut old_pos: Pos) -> usize {
         probe_loop!(probe < indices.len(), {
+            // SAFETY: Loop condition assures that `probe` index is within `indices`
             let pos = unsafe { indices.get_unchecked_mut(probe) };
 
             let mut is_none = true; // work around lack of NLL
@@ -274,6 +281,9 @@ where
         // use swap_remove, but then we need to update the index that points
         // to the other entry that has to move
         self.indices[probe] = None;
+        // SAFETY: This is only safe if `found` is within the bounds of `self.entries`. The way this function is called guarantees that
+        //         this invariant holds, though we might want to promote the whole function to `unsafe` so that this becomes apparent
+        //         at the call site
         let entry = unsafe { self.entries.swap_remove_unchecked(found) };
 
         // correct index that points to the entry that had to swap places
@@ -353,6 +363,9 @@ where
                 let entry_hash = pos.hash();
 
                 if entry_hash.probe_distance(Self::mask(), probe) > 0 {
+                    // SAFETY: This is only safe if `last_probe` is within `self.indices`. The way this function is called guarantees that
+                    //         this invariant holds, though we might want to promote the whole function to `unsafe` so that this becomes apparent
+                    //         at the call site
                     unsafe { *self.indices.get_unchecked_mut(last_probe) = self.indices[probe] }
                     self.indices[probe] = None;
                 } else {
@@ -1027,6 +1040,7 @@ where
         Q: ?Sized + Hash + Eq,
     {
         self.find(key)
+            // SAFETY: `find` returns the correct index of the entry if it exists
             .map(|(_, found)| unsafe { &self.core.entries.get_unchecked(found).value })
     }
 
@@ -1080,6 +1094,7 @@ where
         Q: ?Sized + Hash + Eq,
     {
         if let Some((_, found)) = self.find(key) {
+            // SAFETY: `find` returns the correct index of the entry if it exists
             Some(unsafe { &mut self.core.entries.get_unchecked_mut(found).value })
         } else {
             None
@@ -1587,6 +1602,7 @@ where
 mod tests {
     use core::mem;
 
+    use hash32::FnvHasher;
     use static_assertions::assert_not_impl_any;
 
     use super::{BuildHasherDefault, Entry, FnvIndexMap, IndexMap};
