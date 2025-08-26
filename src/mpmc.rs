@@ -208,6 +208,8 @@ impl<T, S: Storage> QueueInner<T, S> {
 
     /// Returns the item in the front of the queue, or `None` if the queue is empty.
     pub fn dequeue(&self) -> Option<T> {
+        // SAFETY: The pointer comes from the underlying buffer of the queue and is therefore safe to use. The mask also correctly 
+        //         has the lowest `N` bits set
         unsafe { dequeue(S::as_ptr(self.buffer.get()), &self.dequeue_pos, self.mask()) }
     }
 
@@ -215,6 +217,8 @@ impl<T, S: Storage> QueueInner<T, S> {
     ///
     /// Returns back the `item` if the queue is full.
     pub fn enqueue(&self, item: T) -> Result<(), T> {
+        // SAFETY: The pointer comes from the underlying buffer of the queue and is therefore safe to use. The mask also correctly 
+        //         has the lowest `N` bits set
         unsafe {
             enqueue(
                 S::as_ptr(self.buffer.get()),
@@ -255,6 +259,12 @@ impl<T> Cell<T> {
     }
 }
 
+/// Dequeues the next element from the queue. If the queue is empty, returns `None`
+/// 
+/// # Safety
+/// 
+/// `buffer` must point to a contiguous sequence of elements with a power-of-two length called `N`. `mask` must be a bitmask with the lowest 
+/// `K` bits set, where `K` is equal to `log2(N)`
 unsafe fn dequeue<T>(
     buffer: *mut Cell<T>,
     dequeue_pos: &AtomicTargetSize,
@@ -264,6 +274,8 @@ unsafe fn dequeue<T>(
 
     let mut cell;
     loop {
+        // SAFETY: The functions safety guarantees ensure that `pos & mask` will never be out of bounds, therefore `cell` always points
+        //         to an initialized, properly aligned element from the buffer
         cell = buffer.add(usize::from(pos & mask));
         let seq = (*cell).sequence.load(Ordering::Acquire);
         let dif = (seq as IntSize).wrapping_sub((pos.wrapping_add(1)) as IntSize);
@@ -291,6 +303,11 @@ unsafe fn dequeue<T>(
         }
     }
 
+    // SAFETY: The pointer comes from an existing `cell`. Assuming that the CAS algorithm above is correct, the cell will also
+    //         contain properly initialized data. The acquire/release pair on `cell.sequence` should correctly impose order for
+    //         the relaxed CAS on `dequeue_pos`, thus preventing double-dequeue of the same element. The `cmp` operation should
+    //         ensure that the cell does indeed contain an initialized element, as the only way for `sequence` to be equal to `pos + 1`
+    //         is for the `enqueue` function to have run up to `sequence.store()`, which releases the write to the cell data
     let data = (*cell).data.as_ptr().read();
     (*cell)
         .sequence
@@ -298,6 +315,12 @@ unsafe fn dequeue<T>(
     Some(data)
 }
 
+/// Enqueues an element into the internal buffer at `enqueue_pos`. If the queue is full, this will return `Err(item)`
+/// 
+/// # Safety
+/// 
+/// `buffer` must point to a contiguous sequence of elements with a power-of-two length called `N`. `mask` must be a bitmask with the lowest 
+/// `K` bits set, where `K` is equal to `log2(N)`
 unsafe fn enqueue<T>(
     buffer: *mut Cell<T>,
     enqueue_pos: &AtomicTargetSize,
@@ -308,6 +331,8 @@ unsafe fn enqueue<T>(
 
     let mut cell;
     loop {
+        // SAFETY: The functions safety guarantees ensure that `pos & mask` will never be out of bounds, therefore `cell` always points
+        //         to an initialized, properly aligned element from the buffer
         cell = buffer.add(usize::from(pos & mask));
         let seq = (*cell).sequence.load(Ordering::Acquire);
         let dif = (seq as IntSize).wrapping_sub(pos as IntSize);
@@ -335,6 +360,8 @@ unsafe fn enqueue<T>(
         }
     }
 
+    // SAFETY: The pointer comes from an existing `Cell`. Assuming that the CAS algorithm above does not include
+    //         any subtle data races, the cell will be uninitialized, meaning no data is overwritten without being dropped
     (*cell).data.as_mut_ptr().write(item);
     (*cell)
         .sequence
