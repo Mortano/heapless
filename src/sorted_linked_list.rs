@@ -286,21 +286,23 @@ where
     /// Internal access helper
     #[inline(always)]
     fn node_at(&self, index: usize) -> &Node<T, Idx> {
-        // Safety: The entire `self.list` is initialized in `new`, which makes this safe.
+        // SAFETY: This is not guaranteed to be safe as `index` can be out of bounds. Currently, every call to this
+        //         function is with an index that is less than the internal buffer length, but IMO this is dangerous
+        //         usage of `unsafe`!
         unsafe { self.list.borrow().get_unchecked(index) }
     }
 
     /// Internal access helper
     #[inline(always)]
     fn node_at_mut(&mut self, index: usize) -> &mut Node<T, Idx> {
-        // Safety: The entire `self.list` is initialized in `new`, which makes this safe.
+        // SAFETY: See comment in `node_at`
         unsafe { self.list.borrow_mut().get_unchecked_mut(index) }
     }
 
     /// Internal access helper
     #[inline(always)]
     fn write_data_in_node_at(&mut self, index: usize, data: T) {
-        // Safety: The entire `self.list` is initialized in `new`, which makes this safe.
+        // SAFETY: See comment in `node_at`
         unsafe {
             self.node_at_mut(index).val.as_mut_ptr().write(data);
         }
@@ -309,21 +311,21 @@ where
     /// Internal access helper
     #[inline(always)]
     fn read_data_in_node_at(&self, index: usize) -> &T {
-        // Safety: The entire `self.list` is initialized in `new`, which makes this safe.
+        // SAFETY: See comment in `node_at`
         unsafe { &*self.node_at(index).val.as_ptr() }
     }
 
     /// Internal access helper
     #[inline(always)]
     fn read_mut_data_in_node_at(&mut self, index: usize) -> &mut T {
-        // Safety: The entire `self.list` is initialized in `new`, which makes this safe.
+        // SAFETY: See comment in `node_at`
         unsafe { &mut *self.node_at_mut(index).val.as_mut_ptr() }
     }
 
     /// Internal access helper
     #[inline(always)]
     fn extract_data_in_node_at(&mut self, index: usize) -> T {
-        // Safety: The entire `self.list` is initialized in `new`, which makes this safe.
+        // SAFETY: See comment in `node_at`
         unsafe { self.node_at(index).val.as_ptr().read() }
     }
 }
@@ -410,6 +412,7 @@ where
         if self.is_full() {
             Err(value)
         } else {
+            // SAFETY: We checked that the list is not full
             unsafe { self.push_unchecked(value) }
             Ok(())
         }
@@ -483,6 +486,7 @@ where
         if self.is_empty() {
             None
         } else {
+            // SAFETY: We checked that the list is not empty
             Some(unsafe { self.pop_unchecked() })
         }
     }
@@ -670,6 +674,8 @@ where
     fn pop_internal(&mut self) -> T {
         if self.is_head {
             // If it is the head element, we can do a normal pop
+            // SAFETY: `FindMutView` is only instantiated if an element was actually found in `SortedLinkedListInner::find_mut`
+            //         Therefore the list cannot be empty if we reach this statement
             unsafe { self.list.pop_unchecked() }
         } else {
             // Somewhere in the list
@@ -759,6 +765,7 @@ where
         // Only resort the list if the element has changed
         if self.maybe_changed {
             let val = self.pop_internal();
+            // SAFETY: List can't be full because we just removed one element
             unsafe { self.list.push_unchecked(val) };
         }
     }
@@ -838,6 +845,7 @@ where
             let node = self.node_at_mut(i);
             index = node.next;
 
+            // SAFETY: Pointer is valid as it comes from an existing node with initialized value
             unsafe {
                 ptr::drop_in_place(node.val.as_mut_ptr());
             }
