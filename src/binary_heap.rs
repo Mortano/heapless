@@ -624,8 +624,8 @@ where
 {
     fn drop(&mut self) {
         if self.sift {
+            // SAFETY: PeekMut is only instantiated for non-empty heaps, so index `0` is always within the data slice
             unsafe {
-                // SAFETY: PeekMut is only instantiated for non-empty heaps, so index `0` is always within the data slice
                 self.heap.sift_down_to_bottom(0);
             }
         }
@@ -641,7 +641,7 @@ where
     type Target = T;
     fn deref(&self) -> &T {
         debug_assert!(!self.heap.is_empty());
-        // SAFE: PeekMut is only instantiated for non-empty heaps
+        // SAFETY: PeekMut is only instantiated for non-empty heaps
         unsafe { self.heap.data.as_slice().get_unchecked(0) }
     }
 }
@@ -654,7 +654,7 @@ where
 {
     fn deref_mut(&mut self) -> &mut T {
         debug_assert!(!self.heap.is_empty());
-        // SAFE: PeekMut is only instantiated for non-empty heaps
+        // SAFETY: PeekMut is only instantiated for non-empty heaps
         unsafe { self.heap.data.as_mut_slice().get_unchecked_mut(0) }
     }
 }
@@ -677,18 +677,18 @@ impl<T> Drop for Hole<'_, T> {
     #[inline]
     fn drop(&mut self) {
         // fill the hole again
+        // SAFETY: `get_unchecked_mut`: The `Hole` API enforces that `self.pos` is always within the data slice, so an unchecked index operation
+        //                              is valid
+        // SAFETY:  `ptr::write`: Alignment rules for the `dst` pointer are upheld because we convert from a `&mut T` to a `*mut T` and the borrow
+        //                        comes from the underlying data slice, so is properly aligned.
+        //                        The validity rules are harder to check because they are not well-defined yet (see: https://doc.rust-lang.org/std/ptr/index.html#safety)
+        //                        We can assume that since `get_unchecked_mut` correctly accesses the element in the data slice, we get a writeable
+        //                        pointer for `T`. Since `Hole` mutably borrows the data slice, we can also safely assume that we have unique access
+        //                        to that memory location
+        // SAFETY: `ptr::read`: `self.elt` always contains a valid value of type `T`, so reading from that through a pointer is always safe. The
+        //                       validity of `self.elt` is enforced by the safety guarantees of `Hole::new`
         unsafe {
             let pos = self.pos;
-            // SAFETY `get_unchecked_mut`: The `Hole` API enforces that `self.pos` is always within the data slice, so an unchecked index operation
-            //                             is valid
-            // SAFETY `ptr::write`: Alignment rules for the `dst` pointer are upheld because we convert from a `&mut T` to a `*mut T` and the borrow
-            //                      comes from the underlying data slice, so is properly aligned.
-            //                      The validity rules are harder to check because they are not well-defined yet (see: https://doc.rust-lang.org/std/ptr/index.html#safety)
-            //                      We can assume that since `get_unchecked_mut` correctly accesses the element in the data slice, we get a writeable
-            //                      pointer for `T`. Since `Hole` mutably borrows the data slice, we can also safely assume that we have unique access
-            //                      to that memory location
-            // SAFETY `ptr::read`: `self.elt` always contains a valid value of type `T`, so reading from that through a pointer is always safe. The
-            //                      validity of `self.elt` is enforced by the safety guarantees of `Hole::new`
             ptr::write(self.data.get_unchecked_mut(pos), ptr::read(&*self.elt));
         }
     }

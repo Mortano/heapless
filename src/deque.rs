@@ -270,12 +270,13 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
             (&[], &[])
         } else if self.back <= self.front {
             // We have elements at the front and at the back
-            // SAFETY `ptr.add`: `self.front` is always less than the capacity of the storage, so the computed pointer stays within
-            //                   the bounds of the allocation (`self.buffer`). This is safe
-            // SAFETY `from_raw_parts`: The resulting pointer is within the buffer, and the length will be <= `self.storage_capacity`,
-            //                          so the parameters for the slice are valid. The elements within the slice are also properly
-            //                          initialized because we decrement `self.front` only if we push an element to the front
-            //                          By the same logic, the second call to `from_raw_parts` is also safe
+            // SAFETY: 
+            // `ptr.add`: `self.front` is always less than the capacity of the storage, so the computed pointer stays within
+            //            the bounds of the allocation (`self.buffer`). This is safe
+            // `from_raw_parts`: The resulting pointer is within the buffer, and the length will be <= `self.storage_capacity`,
+            //                   so the parameters for the slice are valid. The elements within the slice are also properly
+            //                   initialized because we decrement `self.front` only if we push an element to the front
+            //                   By the same logic, the second call to `from_raw_parts` is also safe
             unsafe {
                 (
                     slice::from_raw_parts(
@@ -823,8 +824,9 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     pub fn swap_remove_front(&mut self, index: usize) -> Option<T> {
         let len = self.storage_len();
         if len > 0 && index < len {
-            // SAFETY `swap_unchecked`: Both indices are within the bounds of the underlying buffer, checked by the surrounding if statement
-            // SAFETY `pop_front_unchecked`: Since we check for `len > 0`, we know the deque is not empty, so it is safe to pop the front element
+            // SAFETY:
+            // `swap_unchecked`: Both indices are within the bounds of the underlying buffer, checked by the surrounding if statement
+            // `pop_front_unchecked`: Since we check for `len > 0`, we know the deque is not empty, so it is safe to pop the front element
             Some(unsafe {
                 self.swap_unchecked(index, 0);
                 self.pop_front_unchecked()
@@ -845,8 +847,9 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
     pub fn swap_remove_back(&mut self, index: usize) -> Option<T> {
         let len = self.storage_len();
         if len > 0 && index < len {
-            // SAFETY `swap_unchecked`: Both indices are within the bounds of the underlying buffer, checked by the surrounding if statement
-            // SAFETY `pop_back_unchecked`: Since we check for `len > 0`, we know the deque is not empty, so it is safe to pop the back element
+            // SAFETY:
+            // `swap_unchecked`: Both indices are within the bounds of the underlying buffer, checked by the surrounding if statement
+            // `pop_back_unchecked`: Since we check for `len > 0`, we know the deque is not empty, so it is safe to pop the back element
             Some(unsafe {
                 self.swap_unchecked(index, len - 1);
                 self.pop_back_unchecked()

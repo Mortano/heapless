@@ -665,9 +665,9 @@ where
         } else {
             match self.core.insert(self.hash_val, self.key, value) {
                 Insert::Success(inserted) => {
+                    // SAFETY: Already checked existence at instantiation and the only mutable reference
+                    //         to the map is internally held.
                     unsafe {
-                        // SAFETY: Already checked existence at instantiation and the only mutable reference
-                        // to the map is internally held.
                         Ok(&mut (*self.core.entries.as_mut_ptr().add(inserted.index)).value)
                     }
                 }
@@ -1602,7 +1602,6 @@ where
 mod tests {
     use core::mem;
 
-    use hash32::FnvHasher;
     use static_assertions::assert_not_impl_any;
 
     use super::{BuildHasherDefault, Entry, FnvIndexMap, IndexMap};

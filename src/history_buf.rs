@@ -329,9 +329,10 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// This leaves the elements up to `self.len()` in an uninitialized state, so the caller has to ensure that the values are not
     /// read again before they are properly reinitialized
     unsafe fn drop_contents(&mut self) {
-        // SAFETY `ptr::slice_from_raw_parts_mut`: Slice data comes from the underlying buffer, `self.len()` is <= buffer capacity
-        // SAFETY `ptr::drop_in_place`: We have `self.len()` initialized values in the slice, these are safe to drop. We are also the
-        //                              unique owner of the slice and the contained elements
+        // SAFETY:
+        // `ptr::slice_from_raw_parts_mut`: Slice data comes from the underlying buffer, `self.len()` is <= buffer capacity
+        // `ptr::drop_in_place`: We have `self.len()` initialized values in the slice, these are safe to drop. We are also the
+        //                       unique owner of the slice and the contained elements
         unsafe {
             ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
                 self.data.borrow_mut().as_mut_ptr().cast::<T>(),
@@ -422,6 +423,8 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// ```
     pub fn recent(&self) -> Option<&T> {
         self.recent_index()
+        // SAFETY: recent_index always points to the most recently written element, so it is both within the buffer
+        //         and properly initialized
             .map(|i| unsafe { &*self.data.borrow()[i].as_ptr() })
     }
 
@@ -463,6 +466,8 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// ```
     pub fn oldest(&self) -> Option<&T> {
         self.oldest_index()
+        // SAFETY: oldest_index always points to the oldest written element, so it is both within the buffer
+        //         and properly initialized
             .map(|i| unsafe { &*self.data.borrow()[i].as_ptr() })
     }
 
