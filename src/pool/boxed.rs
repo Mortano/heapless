@@ -206,6 +206,8 @@ where
     type Target = P::Data;
 
     fn deref(&self) -> &Self::Target {
+        // SAFETY: Box is always initialized with a valid `node_ptr` that contains a value, so the pointer deref
+        //         is valid here
         unsafe { &*self.node_ptr.as_ptr().cast::<P::Data>() }
     }
 }
@@ -215,10 +217,15 @@ where
     P: BoxPool,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: Box is always initialized with a valid `node_ptr` that contains a value, so the pointer deref
+        //         is valid here. Since the underlying nodes are managed through a synchronized stack, no node
+        //         is ever used twice at the same time, so obtaining a unique reference to the data is safe as well
         unsafe { &mut *self.node_ptr.as_ptr().cast::<P::Data>() }
     }
 }
 
+// SAFETY: Moving the `Box` does not move the underlying `node_ptr`, and `Box` derefs to the value pointed to by
+//         `node_ptr`, so it always derefs to a stable address
 unsafe impl<P> StableDeref for Box<P> where P: BoxPool {}
 
 impl<A> fmt::Display for Box<A>
@@ -238,8 +245,12 @@ where
     fn drop(&mut self) {
         let node = self.node_ptr;
 
+        // SAFETY: Box is always initialized with a valid `node` that contains initialized data, so it is safe
+        //         to drop that here since we are the sole owner of that data
         unsafe { ptr::drop_in_place(node.as_ptr().cast::<P::Data>()) }
 
+        // SAFETY: `node` is a valid pointer and came from the stack, we are the sole owner, so pushing back
+        //         into the stack is safe
         unsafe { P::singleton().stack.push(node) }
     }
 }
@@ -296,6 +307,8 @@ where
     }
 }
 
+// SAFETY: `Box` wraps a unique pointer, therefore sending between threads is safe as long as the underlying
+//         type is also `Send`
 unsafe impl<P> Send for Box<P>
 where
     P: BoxPool,
@@ -303,6 +316,10 @@ where
 {
 }
 
+// SAFETY: We cannot mutate the underlying value through anything but a unique reference, so the `Box` itself
+//         is `Sync`. Since we can go from `&Box<T>` to `&T` (through `Deref`) in an unsynchronized way, it is
+//         required that `T: Sync` 
+//         (this is basically the example from the Rustonomicon: https://doc.rust-lang.org/nomicon/send-and-sync.html)
 unsafe impl<P> Sync for Box<P>
 where
     P: BoxPool,
@@ -327,6 +344,9 @@ impl<T> BoxPoolImpl<T> {
 
     fn alloc(&self, value: T) -> Result<NonNullPtr<UnionNode<MaybeUninit<T>>>, T> {
         if let Some(node_ptr) = self.stack.try_pop() {
+            // SAFETY: The pointer comes from a `&'static mut` memory block passed to `Self::manage`, so it is 
+            //         valid for writes. Casting to `T` is also valid as the node is a union storing `MaybeUninit<T>`,
+            //         which has the same memory layout as `T`
             unsafe { node_ptr.as_ptr().cast::<T>().write(value) }
 
             Ok(node_ptr)
@@ -338,10 +358,14 @@ impl<T> BoxPoolImpl<T> {
     fn manage(&self, block: &'static mut BoxBlock<T>) {
         let node: &'static mut _ = &mut block.node;
 
+        // SAFETY: The pointer comes from a `&'static mut`, so it is valid and unique
         unsafe { self.stack.push(NonNullPtr::from_static_mut_ref(node)) }
     }
 }
 
+// SAFETY: This is safe even for types that are not `Send` because the `BoxPoolImpl` does only manage blocks of 
+//         uninitialized memory and the type `T` is only used to guarantee the correct memory layout of the blocks.
+//         There never will be an actual initialized value of `T` sent between threads
 unsafe impl<T> Sync for BoxPoolImpl<T> {}
 
 /// A chunk of memory that a `BoxPool` singleton can manage
@@ -385,6 +409,8 @@ mod tests {
     fn can_alloc_if_pool_manages_one_block() {
         box_pool!(MyBoxPool: i32);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: BoxBlock<i32> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -398,6 +424,8 @@ mod tests {
     fn alloc_drop_alloc() {
         box_pool!(MyBoxPool: i32);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: BoxBlock<i32> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -425,6 +453,8 @@ mod tests {
 
         box_pool!(MyBoxPool: MyStruct);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: BoxBlock<MyStruct> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -447,6 +477,8 @@ mod tests {
 
         box_pool!(MyBoxPool: Zst4096);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: BoxBlock<Zst4096> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -474,10 +506,13 @@ mod tests {
 
         box_pool!(MyBoxPool: MyStruct);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         MyBoxPool.manage(unsafe {
             static mut BLOCK: BoxBlock<MyStruct> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
         });
+        // SAFETY: Same as above
         MyBoxPool.manage(unsafe {
             static mut BLOCK: BoxBlock<MyStruct> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -507,6 +542,8 @@ mod tests {
 
         box_pool!(MyBoxPool: MyStruct);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         MyBoxPool.manage(unsafe {
             static mut BLOCK: BoxBlock<MyStruct> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -541,10 +578,13 @@ mod tests {
 
         box_pool!(MyBoxPool: MyStruct);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         MyBoxPool.manage(unsafe {
             static mut BLOCK: BoxBlock<MyStruct> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
         });
+        // SAFETY: Same as above
         MyBoxPool.manage(unsafe {
             static mut BLOCK: BoxBlock<MyStruct> = BoxBlock::new();
             addr_of_mut!(BLOCK).as_mut().unwrap()
