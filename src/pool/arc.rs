@@ -195,6 +195,9 @@ impl<T> ArcPoolImpl<T> {
     }
 }
 
+// SAFETY: This is safe even for types that are not `Send` because the `ArcPoolImpl` does only manage blocks of 
+//         uninitialized memory and the type `T` is only used to guarantee the correct memory layout of the blocks.
+//         There never will be an actual initialized value of `T` sent between threads
 unsafe impl<T> Sync for ArcPoolImpl<T> {}
 
 /// Like `std::sync::Arc` but managed by memory pool `P`
@@ -385,6 +388,9 @@ where
     }
 }
 
+// SAFETY: By sending an `Arc` to another thread, we can share access to the underlying type between threads.
+//         This requires that `T: Sync`. In addition, we can also use this behavior to simply send the underlying
+//         type from one thread to another, so `T: Send` also has to hold
 unsafe impl<A> Send for Arc<A>
 where
     A: ArcPool,
@@ -392,6 +398,9 @@ where
 {
 }
 
+// SAFETY: `Arc` itself has synchronized access to the ref count, which requires ownership of the `Arc` to be 
+//         changed. That makes the ref-counting part of `Arc` inherently `Sync`. Additionally, we can share the
+//         underlying type between threads, so `T: Sync + Send` has to hold 
 unsafe impl<A> Sync for Arc<A>
 where
     A: ArcPool,
