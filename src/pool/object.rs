@@ -161,12 +161,17 @@ impl<T> ObjectPoolImpl<T> {
     fn manage(&self, block: &'static mut ObjectBlock<T>) {
         let node: &'static mut _ = &mut block.node;
 
+        // SAFETY: As the node comes from a `&mut`, there can be no aliases to it. The pointer itself is valid as it points
+        //         into the `ObjectBlock<T>`
         unsafe { self.stack.push(NonNullPtr::from_static_mut_ref(node)) }
     }
 }
 
-// `T needs` to be Send because returning an object from a thread and then
+// SAFETY: `T` needs to be Send because returning an object from a thread and then
 // requesting it from another is effectively a cross-thread 'send' operation
+// Note that this is different than the unsafe impl of `ArcPoolImpl` and `BoxPoolImpl`
+// as these only store uninitialized memory and hence don't need `T: Send`, whereas the
+// `ObjectPoolImpl` stores *initialized* values of type `T`
 unsafe impl<T> Sync for ObjectPoolImpl<T> where T: Send {}
 
 /// An object managed by object pool `P`
@@ -212,6 +217,10 @@ where
     type Target = A::Data;
 
     fn deref(&self) -> &Self::Target {
+        // SAFETY: Every `Object` instance is created through a valid `ObjectBlock`, which wraps an
+        //         initialized value of type `T`. This makes the pointer itself valid. As for aliasing,
+        //         every `Object` points to a unique `ObjectBlock`, so aliasing can only happen through
+        //         a `&Object`
         unsafe { &*ptr::addr_of!((*self.node_ptr.as_ptr()).data) }
     }
 }
@@ -221,10 +230,17 @@ where
     A: ObjectPool,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: Every `Object` instance is created through a valid `ObjectBlock`, which wraps an
+        //         initialized value of type `T`. This makes the pointer itself valid. As for aliasing,
+        //         every `Object` points to a unique `ObjectBlock`, so the only way to obtain a unique
+        //         reference is through a `&mut Object`, for which the language will enforce the aliasing
+        //         rules
         unsafe { &mut *ptr::addr_of_mut!((*self.node_ptr.as_ptr()).data) }
     }
 }
 
+// SAFETY: Moving the `Object` does not move the underlying `node_ptr`, and `Object` derefs to the value pointed to by
+//         `node_ptr`, so it always derefs to a stable address
 unsafe impl<A> StableDeref for Object<A> where A: ObjectPool {}
 
 impl<A> fmt::Display for Object<A>
@@ -242,6 +258,8 @@ where
     P: ObjectPool,
 {
     fn drop(&mut self) {
+        // SAFETY: Every `Object` wraps a unique valid `ObjectBlock` through `node_ptr`, so the pointer itself is valid and
+        //         cannot be aliased (since we hold the only unique reference to the `Object`)
         unsafe { P::singleton().stack.push(self.node_ptr) }
     }
 }
@@ -298,6 +316,8 @@ where
     }
 }
 
+// SAFETY: `Object` wraps a unique pointer, therefore sending between threads is safe as long as the underlying
+//         type is also `Send`
 unsafe impl<P> Send for Object<P>
 where
     P: ObjectPool,
@@ -305,6 +325,9 @@ where
 {
 }
 
+// SAFETY: We cannot mutate the underlying value through anything but a unique reference, so the `Object` itself
+//         is `Sync`. Since we can go from `&Object<T>` to `&T` (through `Deref`) in an unsynchronized way, it is
+//         required that `T: Sync`
 unsafe impl<P> Sync for Object<P>
 where
     P: ObjectPool,
@@ -347,6 +370,8 @@ mod tests {
     fn can_request_if_manages_one_block() {
         object_pool!(MyObjectPool: i32);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: ObjectBlock<i32> = ObjectBlock::new(1);
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -360,6 +385,8 @@ mod tests {
     fn request_drop_request() {
         object_pool!(MyObjectPool: i32);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: ObjectBlock<i32> = ObjectBlock::new(1);
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -388,6 +415,8 @@ mod tests {
 
         object_pool!(MyObjectPool: MyStruct);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: ObjectBlock<MyStruct> = ObjectBlock::new(MyStruct);
             addr_of_mut!(BLOCK).as_mut().unwrap()
@@ -410,6 +439,8 @@ mod tests {
 
         object_pool!(MyObjectPool: Zst4096);
 
+        // SAFETY: The Rust test harness never executes the same test more than once concurrently, so mutable access
+        //         to the `static` block is safe as this function is the sole owner
         let block = unsafe {
             static mut BLOCK: ObjectBlock<Zst4096> = ObjectBlock::new(Zst4096);
             addr_of_mut!(BLOCK).as_mut().unwrap()
