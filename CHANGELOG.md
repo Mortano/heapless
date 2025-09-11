@@ -7,17 +7,33 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+- Minor fixes to module docs.
+- Make MSRV of 1.87.0 explicit.
+
+- Implement `Default` for `CapacityError`.
+- Implement `defmt::Format` for `CapacityError`.
+- Implement `TryFrom` for `Deque` from array.
+
+## [v0.9.1] - 2025-08-19
+
+### Added
+
+- Added `String::insert` and `String::insert_str`.
+
 ### Changed
 
 - `bytes::BufMut` is now implemented on `VecInner`.
 - Removed generic from `history_buf::OldestOrdered`.
 - Made `LenType` opt-in.
 - Minor fixes to `pool::boxed` docs.
+- Add missing `Debug` derive to `vec::IntoIter`.
+- Removed generic from `spsc::Consumer`, `spsc::Producer` and `spsc::Iter`.
 
 ### Fixed
 
 - CI now uses flags specified in `Cargo.toml` for `rustdoc` tests.
 - Fixed clippy lints.
+- Fixed the memory layout of the internal `UnionNode<T>` type, fixing possible Undefined Behaviour.
 
 ### Removed
 
@@ -692,7 +708,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Initial release
 
-[Unreleased]: https://github.com/rust-embedded/heapless/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/rust-embedded/heapless/compare/v0.9.1...HEAD
+[v0.9.1]: https://github.com/rust-embedded/heapless/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/rust-embedded/heapless/compare/v0.8.0...v0.9.0
 [v0.8.0]: https://github.com/rust-embedded/heapless/compare/v0.7.16...v0.8.0
 [v0.7.16]: https://github.com/rust-embedded/heapless/compare/v0.7.15...v0.7.16
