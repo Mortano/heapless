@@ -426,6 +426,7 @@ impl<LenT: LenType, S: StringStorage + ?Sized> StringInner<LenT, S> {
     /// ```
     #[inline]
     pub fn as_str(&self) -> &str {
+        // SAFETY: The API of `String` guarantees that `vec` always contains valid UTF-8
         unsafe { str::from_utf8_unchecked(self.vec.as_slice()) }
     }
 
@@ -445,6 +446,7 @@ impl<LenT: LenType, S: StringStorage + ?Sized> StringInner<LenT, S> {
     /// ```
     #[inline]
     pub fn as_mut_str(&mut self) -> &mut str {
+        // SAFETY: The API of `String` guarantees that `vec` always contains valid UTF-8
         unsafe { str::from_utf8_unchecked_mut(self.vec.as_mut_slice()) }
     }
 
@@ -452,10 +454,11 @@ impl<LenT: LenType, S: StringStorage + ?Sized> StringInner<LenT, S> {
     ///
     /// # Safety
     ///
-    /// This function is unsafe because it does not check that the bytes passed
-    /// to it are valid UTF-8. If this constraint is violated, it may cause
-    /// memory unsafety issues with future users of the `String`, as the rest of
-    /// the library assumes that `String`s are valid UTF-8.
+    /// This function is unsafe because it allows changing the contents
+    /// of the `String` without checking that they remain valid UTF-8. If
+    /// this constraint is violated, it may cause memory unsafety issues
+    /// with future users of the `String`, as the rest of the library assumes
+    /// that `String`s are valid UTF-8.
     ///
     /// # Examples
     ///
@@ -608,6 +611,8 @@ impl<LenT: LenType, S: StringStorage + ?Sized> StringInner<LenT, S> {
 
         // pop bytes that correspond to `ch`
         for _ in 0..ch.len_utf8() {
+            // SAFETY: `next_back` didn't return `None`, so there is at least one
+            //         character in this `String`
             unsafe {
                 self.vec.pop_unchecked();
             }
@@ -649,6 +654,10 @@ impl<LenT: LenType, S: StringStorage + ?Sized> StringInner<LenT, S> {
         let next = index + ch.len_utf8();
         let len = self.len();
         let ptr = self.vec.as_mut_ptr();
+        // SAFETY: Both `next` and `index` are within the bounds of the `vec` as otherwise
+        //         this function would have panicked. `next` is also `>= index`, so the
+        //         length calculation will not underflow. The new length will remain on a
+        //         UTF-8 boundary since we removed exactly `ch.len_utf8` bytes
         unsafe {
             core::ptr::copy(ptr.add(next), ptr.add(index), len - next);
             self.vec.set_len(len - (next - index));

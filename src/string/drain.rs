@@ -27,20 +27,25 @@ impl<LenT: LenType> fmt::Debug for Drain<'_, LenT> {
     }
 }
 
+// SAFETY: The inner `string` pointer is only accessed during the destructor, making
+//         concurrent access to the underlying string impossible
 unsafe impl<LenT: LenType> Sync for Drain<'_, LenT> {}
+// SAFETY: The inner `string` pointer is only accessed during the destructor, making
+//         concurrent access to the underlying string impossible
 unsafe impl<LenT: LenType> Send for Drain<'_, LenT> {}
 
 impl<LenT: LenType> Drop for Drain<'_, LenT> {
     fn drop(&mut self) {
-        unsafe {
-            // Use `Vec::drain`. “Reaffirm” the bounds checks to avoid
-            // panic code being inserted again.
-            let self_vec = (*self.string).as_mut_vec();
-            let start = self.start.into_usize();
-            let end = self.end.into_usize();
-            if start <= end && end <= self_vec.len() {
-                self_vec.drain(start..end);
-            }
+        // Use `Vec::drain`. “Reaffirm” the bounds checks to avoid
+        // panic code being inserted again.
+
+        // SAFETY: `as_mut_vec` is safe because the drain range `start..end` is on a char
+        //         boundary due to asserts in `StringInner::drain`
+        let self_vec = unsafe { (*self.string).as_mut_vec() };
+        let start = self.start.into_usize();
+        let end = self.end.into_usize();
+        if start <= end && end <= self_vec.len() {
+            self_vec.drain(start..end);
         }
     }
 }
