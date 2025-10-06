@@ -356,7 +356,7 @@ impl<T, LenT: LenType, const N: usize> Vec<T, N, LenT> {
             Self {
                 phantom: PhantomData,
                 len: LenT::from_usize(N),
-                // NOTE(unsafe) ManuallyDrop<[T; M]> and [MaybeUninit<T>; N]
+                // SAFETY: ManuallyDrop<[T; M]> and [MaybeUninit<T>; N]
                 // have the same layout when N == M.
                 buffer: unsafe { mem::transmute_copy(&src) },
             }
@@ -364,11 +364,12 @@ impl<T, LenT: LenType, const N: usize> Vec<T, N, LenT> {
             let mut v = Self::new();
 
             for (src_elem, dst_elem) in src.iter().zip(v.buffer.buffer.iter_mut()) {
-                // NOTE(unsafe) src element is not going to drop as src itself
+                // SAFETY: src element is not going to drop as src itself
                 // is wrapped in a ManuallyDrop.
                 dst_elem.write(unsafe { ptr::read(src_elem) });
             }
 
+            // SAFETY: Exactly `M` elements in `v` have been properly initialized
             unsafe { v.set_len(M) };
             v
         }
@@ -388,6 +389,8 @@ impl<T, LenT: LenType, const N: usize> Vec<T, N, LenT> {
     pub fn into_array<const M: usize>(self) -> Result<[T; M], Self> {
         if self.len() == M {
             // This is how the unstable `MaybeUninit::array_assume_init` method does it
+            // SAFETY: Since `M == self.len()` and the buffer has the same memory layout as `[T; M]`,
+            //         the read operation is safe
             let array = unsafe { (core::ptr::from_ref(&self.buffer).cast::<[T; M]>()).read() };
 
             // We don't want `self`'s destructor to be called because that would drop all the
@@ -408,6 +411,8 @@ impl<T, LenT: LenType, const N: usize> Vec<T, N, LenT> {
         let mut new = Self::new();
         // avoid `extend_from_slice` as that introduces a runtime check/panicking branch
         for elem in self {
+            // SAFETY: The new vector can never be full as it has the same number of elements
+            //         as `self`
             unsafe {
                 new.push_unchecked(elem.clone());
             }
@@ -424,10 +429,10 @@ impl<T, LenT: LenType, const N: usize> Vec<T, N, LenT> {
         const { check_capacity_fits::<NewLenT, N>() }
         let this = ManuallyDrop::new(self);
 
-        // SAFETY: Pointer argument is derived from a reference, meeting the safety documented invariants.
-        // This also prevents double drops by wrapping `self` in `ManuallyDrop`.
         Vec {
             len: NewLenT::from_usize(this.len()),
+            // SAFETY: Pointer argument is derived from a reference, meeting the safety documented invariants.
+            // This also prevents double drops by wrapping `self` in `ManuallyDrop`.
             buffer: unsafe { ptr::read(&this.buffer) },
             phantom: PhantomData,
         }
@@ -484,17 +489,22 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
         let len = self.len();
         let Range { start, end } = crate::slice::range(range, ..len);
 
+        // SAFETY: `start` is within bounds as `slice::range` checks this. Elements might
+        //         leak this way, but that is documented in the function docs
         unsafe {
             // Set `self.vec` length's to `start`, to be safe in case `Drain` is leaked.
             self.set_len(start);
-            let vec = NonNull::from(self.as_mut_view());
-            let range_slice = slice::from_raw_parts(vec.as_ref().as_ptr().add(start), end - start);
-            Drain {
-                tail_start: LenT::from_usize(end),
-                tail_len: LenT::from_usize(len - end),
-                iter: range_slice.iter(),
-                vec,
-            }
+        }
+        let vec = NonNull::from(self.as_mut_view());
+        // SAFETY: `start` and `end` are within bounds, the pointer comes from the underlying `vec`,
+        //         so we end up with a properly aligned and initialized slice
+        let range_slice =
+            unsafe { slice::from_raw_parts(vec.as_ref().as_ptr().add(start), end - start) };
+        Drain {
+            tail_start: LenT::from_usize(end),
+            tail_len: LenT::from_usize(len - end),
+            iter: range_slice.iter(),
+            vec,
         }
     }
 
@@ -561,7 +571,8 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
     /// assert_eq!(buffer.as_slice(), &[1, 2, 3, 5, 8]);
     /// ```
     pub fn as_slice(&self) -> &[T] {
-        // NOTE(unsafe) avoid bound checks in the slicing operation
+        // SAFETY: Avoid bound checks in the slicing operation, but we know
+        //         that the buffer is exactly `self.len` elements long
         // &buffer[..self.len]
         unsafe {
             slice::from_raw_parts(
@@ -585,8 +596,9 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
     /// assert_eq!(buffer.as_slice(), &[9, 2, 3, 5, 8]);
     /// ```
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        // NOTE(unsafe) avoid bound checks in the slicing operation
-        // &mut buffer[..self.len]
+        // SAFETY: Avoid bound checks in the slicing operation, but we know
+        //         that the buffer is exactly `self.len` elements long
+        // &buffer[..self.len]
         unsafe {
             slice::from_raw_parts_mut(
                 self.buffer.borrow_mut().as_mut_ptr().cast::<T>(),
@@ -651,6 +663,8 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
                 Err(CapacityError)
             } else {
                 for elem in other {
+                    // SAFETY: `len` will never be out of bounds of `buf` as this was
+                    //         checked above
                     unsafe {
                         *buf.get_unchecked_mut(len.into_usize()) = MaybeUninit::new(elem.clone());
                     }
@@ -668,6 +682,7 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
         if self.len == LenT::ZERO {
             None
         } else {
+            // SAFETY: We checked that there is at least one element
             Some(unsafe { self.pop_unchecked() })
         }
     }
@@ -677,6 +692,7 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
     /// Returns back the `item` if the vector is full.
     pub fn push(&mut self, item: T) -> Result<(), T> {
         if self.len() < self.capacity() {
+            // SAFETY: We checked that there is space for at least one more element
             unsafe { self.push_unchecked(item) }
             Ok(())
         } else {
@@ -720,8 +736,7 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
 
     /// Shortens the vector, keeping the first `len` elements and dropping the rest.
     pub fn truncate(&mut self, len: usize) {
-        // This is safe because:
-        //
+        // SAFETY:
         // * the slice passed to `drop_in_place` is valid; the `len > self.len`
         //   case avoids creating an invalid slice, and
         // * the `len` of the vector is shrunk before calling `drop_in_place`,
@@ -905,6 +920,7 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
     /// ```
     pub fn swap_remove(&mut self, index: usize) -> T {
         assert!(index < self.len());
+        // SAFETY: `index` is guaranteed to be within bounds
         unsafe { self.swap_remove_unchecked(index) }
     }
 
@@ -1030,6 +1046,9 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
             return Err(element);
         }
 
+        // SAFETY: `index` is within bounds, making the pointer `p` and the `copy`
+        //         and `write` operationy safe. After that, the new length is `len + 1`,
+        //         so `self.set_len` is safe as well
         unsafe {
             // infallible
             // The spot to put the new value
@@ -1078,6 +1097,10 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
         if index >= len {
             panic!("removal index (is {index}) should be < len (is {len})");
         }
+        // SAFETY: `index` is within bounds, making `ptr` valid for reads and the `copy`
+        //         operation in bounds. The new length is indeed `len - 1`, making `self.set_len`
+        //         safe. There is no double-free because the `read` + `copy` implements a move
+        //         out of the memory address
         unsafe {
             // infallible
             let ret;
@@ -1160,6 +1183,7 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
         let original_len = self.len;
         // Avoid double drop if the drop guard is not executed,
         // since we may make some holes during the process.
+        // SAFETY: Zero is always a valid length
         unsafe { self.set_len(0) };
 
         // Vec: [Kept, Kept, Hole, Hole, Hole, Hole, Unchecked, Unchecked]
@@ -1458,6 +1482,7 @@ impl<T, LenT: LenType, const N: usize> Iterator for IntoIter<T, N, LenT> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         if self.next < self.vec.len {
+            // SAFETY: `self.next` is within bounds and therefore valid to read from
             let item = unsafe {
                 self.vec
                     .buffer
@@ -1482,6 +1507,8 @@ where
         let mut vec = Vec::new();
 
         if self.next < self.vec.len {
+            // SAFETY: `self.next` is within bounds, so it is safe to create a slice from
+            //         it to `self.vec.len`
             let s = unsafe {
                 slice::from_raw_parts(
                     self.vec
@@ -1509,6 +1536,8 @@ where
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let s = if self.next < self.vec.len {
+            // SAFETY: `self.next` is within bounds, so it is safe to create a slice from
+            //         it to `self.vec.len`
             unsafe {
                 slice::from_raw_parts(
                     self.vec
@@ -1530,6 +1559,9 @@ where
 
 impl<T, LenT: LenType, const N: usize> Drop for IntoIter<T, N, LenT> {
     fn drop(&mut self) {
+        // SAFETY: The slice range is valid as `self.next` is always <= `self.vec.len`. This slice
+        //         contains properly initialized instance of `T`, and since it borrows the `vec`
+        //         mutably, dropping in place is allowed
         unsafe {
             // Drop all the elements that have not been moved out of vec
             ptr::drop_in_place(&mut self.vec.as_mut_slice()[self.next.into_usize()..]);
@@ -2218,12 +2250,14 @@ mod tests {
         uninit[0].write(1);
         uninit[1].write(2);
         uninit[2].write(3);
+        // SAFETY: We just wrote exactly 3 elements
         unsafe { v.set_len(3) };
         assert_eq!(v.as_slice(), &[1, 2, 3]);
 
         let uninit = v.spare_capacity_mut();
         assert_eq!(uninit.len(), 1);
         uninit[0].write(4);
+        // SAFETY: We just wrote another element for a total length of 4
         unsafe { v.set_len(4) };
         assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
 

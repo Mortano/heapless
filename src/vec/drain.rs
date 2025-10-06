@@ -56,7 +56,13 @@ impl<T, LenT: LenType> AsRef<[T]> for Drain<'_, T, LenT> {
     }
 }
 
+// SAFETY: The only unsynchronized member is the `vec` field, which is only accessed
+//         during the destructor, making concurrent access to the underlying vector
+//         impossible
 unsafe impl<T: Sync, LenT: LenType> Sync for Drain<'_, T, LenT> {}
+// SAFETY: The only unsynchronized member is the `vec` field, which is only accessed
+//         during the destructor, making concurrent access to the underlying vector
+//         impossible
 unsafe impl<T: Send, LenT: LenType> Send for Drain<'_, T, LenT> {}
 
 impl<T, LenT: LenType> Iterator for Drain<'_, T, LenT> {
@@ -66,6 +72,10 @@ impl<T, LenT: LenType> Iterator for Drain<'_, T, LenT> {
     fn next(&mut self) -> Option<T> {
         self.iter
             .next()
+            // SAFETY: Reading from a pointer obtained from a reference is always valid
+            //         Note that the ref-to-ptr conversion is required because we use the
+            //         slice iterator for moving elements out of the vector, which only
+            //         iterates by reference
             .map(|elt| unsafe { ptr::read(core::ptr::from_ref(elt)) })
     }
 
@@ -79,6 +89,7 @@ impl<T, LenT: LenType> DoubleEndedIterator for Drain<'_, T, LenT> {
     fn next_back(&mut self) -> Option<T> {
         self.iter
             .next_back()
+            // SAFETY: Reading from a pointer obtained from a reference is always valid
             .map(|elt| unsafe { ptr::read(core::ptr::from_ref(elt)) })
     }
 }
@@ -91,6 +102,10 @@ impl<T, LenT: LenType> Drop for Drain<'_, T, LenT> {
         impl<T, LenT: LenType> Drop for DropGuard<'_, '_, T, LenT> {
             fn drop(&mut self) {
                 if self.0.tail_len > LenT::ZERO {
+                    // SAFETY: `Vec::drain` guarantees that `tail_start` and `tail_len` correctly represent
+                    //         the part of the vec *after* the drain. `start` is also within the bounds of
+                    //         the vector, so the whole copy operation is valid. After the copying, the final
+                    //         length of the vector is restored by adding the number of elements in the tail
                     unsafe {
                         let source_vec = self.0.vec.as_mut();
                         // memmove back untouched tail, update to new length
@@ -116,6 +131,9 @@ impl<T, LenT: LenType> Drop for Drain<'_, T, LenT> {
         if size_of::<T>() == 0 {
             // ZSTs have no identity, so we don't need to move them around, we only need to drop the correct amount.
             // this can be achieved by manipulating the `Vec` length instead of moving values out from `iter`.
+            // SAFETY: `drop_len` can never be larger than the initial size of the drain, which is in bounds due
+            //         to the checks in `Vec::drain`. This makes `set_len` safe and correct. `vec.as_mut` is safe
+            //         because the pointer comes from a `&mut Vec` in `Vec::drain`
             unsafe {
                 let vec = vec.as_mut();
                 let old_len = vec.len();
@@ -140,6 +158,11 @@ impl<T, LenT: LenType> Drop for Drain<'_, T, LenT> {
         // lead to invalid pointer arithmetic below.
         let drop_ptr = iter.as_slice().as_ptr();
 
+        // SAFETY: `vec.as_mut()` is safe because the pointer comes from a `&mut Vec` in `Vec::drain`
+        //         The `to_drop` slice has the correct length (which comes from the `iter` field) and
+        //         the pointer is simply a reconstruction of `drop_ptr` as a `*mut T`. Dropping in-place
+        //         is safe because all elements in the `to_drop` range are initialized and the `Drain`
+        //         instance mutably borrows the `vec`, so we have exclusive access here
         unsafe {
             // drop_ptr comes from a slice::Iter which only gives us a &[T] but for drop_in_place
             // a pointer with mutable provenance is necessary. Therefore we must reconstruct
