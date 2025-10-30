@@ -319,7 +319,7 @@ where
 
 // SAFETY: We cannot mutate the underlying value through anything but a unique reference, so the `Box` itself
 //         is `Sync`. Since we can go from `&Box<T>` to `&T` (through `Deref`) in an unsynchronized way, it is
-//         required that `T: Sync` 
+//         required that `T: Sync`
 //         (this is basically the example from the Rustonomicon: https://doc.rust-lang.org/nomicon/send-and-sync.html)
 unsafe impl<P> Sync for Box<P>
 where
@@ -345,7 +345,7 @@ impl<T> BoxPoolImpl<T> {
 
     fn alloc(&self, value: T) -> Result<NonNullPtr<UnionNode<MaybeUninit<T>>>, T> {
         if let Some(node_ptr) = self.stack.try_pop() {
-            // SAFETY: The pointer comes from a `&'static mut` memory block passed to `Self::manage`, so it is 
+            // SAFETY: The pointer comes from a `&'static mut` memory block passed to `Self::manage`, so it is
             //         valid for writes. Casting to `T` is also valid as the node is a union storing `MaybeUninit<T>`,
             //         which has the same memory layout as `T`
             unsafe { node_ptr.as_ptr().cast::<T>().write(value) }
@@ -364,7 +364,7 @@ impl<T> BoxPoolImpl<T> {
     }
 }
 
-// SAFETY: This is safe even for types that are not `Send` because the `BoxPoolImpl` does only manage blocks of 
+// SAFETY: This is safe even for types that are not `Send` because the `BoxPoolImpl` does only manage blocks of
 //         uninitialized memory and the type `T` is only used to guarantee the correct memory layout of the blocks.
 //         There never will be an actual initialized value of `T` sent between threads
 unsafe impl<T> Sync for BoxPoolImpl<T> {}

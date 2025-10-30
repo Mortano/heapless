@@ -177,7 +177,7 @@ impl<T> ArcPoolImpl<T> {
                 data: value,
                 strong: AtomicUsize::new(1),
             };
-            // SAFETY: We got an unused node from the stack. Unused nodes either come from manual calls to `manage`, or from the 
+            // SAFETY: We got an unused node from the stack. Unused nodes either come from manual calls to `manage`, or from the
             //         destructor of `Arc<T>`. In both cases the memory is uninitialized at the point of insertion into the stack,
             //         so writing here is safe
             unsafe { node_ptr.as_ptr().cast::<ArcInner<T>>().write(inner) }
@@ -197,7 +197,7 @@ impl<T> ArcPoolImpl<T> {
     }
 }
 
-// SAFETY: This is safe even for types that are not `Send` because the `ArcPoolImpl` does only manage blocks of 
+// SAFETY: This is safe even for types that are not `Send` because the `ArcPoolImpl` does only manage blocks of
 //         uninitialized memory and the type `T` is only used to guarantee the correct memory layout of the blocks.
 //         There never will be an actual initialized value of `T` sent between threads
 unsafe impl<T> Sync for ArcPoolImpl<T> {}
@@ -225,11 +225,11 @@ where
         Self { node_ptr }
     }
 
-    /// Gets a mutable borrow to the data stored inside this `Arc<T>`, without checking whether there is another `Arc<T>` 
+    /// Gets a mutable borrow to the data stored inside this `Arc<T>`, without checking whether there is another `Arc<T>`
     /// pointing to the same data
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// To adhere to the aliasing rules, it is only valid to call this function if `this` is the only remaining `Arc<T>` pointing
     /// to the underlying data
     unsafe fn get_mut_unchecked(this: &mut Self) -> &mut P::Data {
@@ -241,15 +241,15 @@ where
     }
 
     /// Drops the underlying data and returns the memory block to the `ArcPool` corresponding to `P`
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// To adhere to the aliasing rules, it is only valid to call this function if `this` is the only remaining `Arc<T>` pointing
     /// to the underlying data
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
         // run `P::Data`'s destructor
-        // SAFETY: `drop_slow` is only called on a valid `Arc<T>`, so the underlying data is initialized and can be dropped. It 
+        // SAFETY: `drop_slow` is only called on a valid `Arc<T>`, so the underlying data is initialized and can be dropped. It
         //         is only valid to do so if this is the last `Arc<T>` pointing to the data
         ptr::drop_in_place(Self::get_mut_unchecked(self));
 
@@ -304,7 +304,7 @@ where
     type Target = P::Data;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: All `Arc<T>` instances are constructred with a valid `node_ptr`, so dereferencing that is valid. Upon 
+        // SAFETY: All `Arc<T>` instances are constructred with a valid `node_ptr`, so dereferencing that is valid. Upon
         //         creation of `Arc<T>`, the node is also properly initialized, so borrowing `data` is also valid
         unsafe { &*ptr::addr_of!((*self.node_ptr.as_ptr().cast::<ArcInner<P::Data>>()).data) }
     }
@@ -331,7 +331,7 @@ where
 
         atomic::fence(Ordering::Acquire);
 
-        // SAFETY: The fence together with the `fetch_sub` operation guarantees that we are the only ones that 
+        // SAFETY: The fence together with the `fetch_sub` operation guarantees that we are the only ones that
         //         decremented the reference count to zero, therefore we are the last remaining `Arc<T>` and can
         //         safely drop the data
         unsafe { self.drop_slow() }
@@ -400,9 +400,9 @@ where
 {
 }
 
-// SAFETY: `Arc` itself has synchronized access to the ref count, which requires ownership of the `Arc` to be 
+// SAFETY: `Arc` itself has synchronized access to the ref count, which requires ownership of the `Arc` to be
 //         changed. That makes the ref-counting part of `Arc` inherently `Sync`. Additionally, we can share the
-//         underlying type between threads, so `T: Sync + Send` has to hold 
+//         underlying type between threads, so `T: Sync + Send` has to hold
 unsafe impl<A> Sync for Arc<A>
 where
     A: ArcPool,
@@ -455,7 +455,7 @@ mod tests {
     fn can_alloc_if_manages_one_block() {
         arc_pool!(MyArcPool: i32);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {
@@ -471,7 +471,7 @@ mod tests {
     fn alloc_drop_alloc() {
         arc_pool!(MyArcPool: i32);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {
@@ -491,7 +491,7 @@ mod tests {
     fn strong_count_starts_at_one() {
         arc_pool!(MyArcPool: i32);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {
@@ -509,7 +509,7 @@ mod tests {
     fn clone_increases_strong_count() {
         arc_pool!(MyArcPool: i32);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {
@@ -533,7 +533,7 @@ mod tests {
     fn drop_decreases_strong_count() {
         arc_pool!(MyArcPool: i32);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {
@@ -567,7 +567,7 @@ mod tests {
 
         arc_pool!(MyArcPool: MyStruct);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {
@@ -592,7 +592,7 @@ mod tests {
 
         arc_pool!(MyArcPool: Zst4096);
 
-        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as 
+        // SAFETY: The pointer points to valid initialized memory, so `as_mut` is a valid conversion. As long as
         //         there are not two concurrent instances of this function running in the same process, it should
         //         also be fine to mutably borrow the `static mut`
         let block = unsafe {

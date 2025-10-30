@@ -429,8 +429,8 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// ```
     pub fn recent(&self) -> Option<&T> {
         self.recent_index()
-        // SAFETY: recent_index always points to the most recently written element, so it is both within the buffer
-        //         and properly initialized
+            // SAFETY: recent_index always points to the most recently written element, so it is both within the buffer
+            //         and properly initialized
             .map(|i| unsafe { &*self.data.borrow()[i].as_ptr() })
     }
 
@@ -472,8 +472,8 @@ impl<T, S: HistoryBufStorage<T> + ?Sized> HistoryBufInner<T, S> {
     /// ```
     pub fn oldest(&self) -> Option<&T> {
         self.oldest_index()
-        // SAFETY: oldest_index always points to the oldest written element, so it is both within the buffer
-        //         and properly initialized
+            // SAFETY: oldest_index always points to the oldest written element, so it is both within the buffer
+            //         and properly initialized
             .map(|i| unsafe { &*self.data.borrow()[i].as_ptr() })
     }
 
