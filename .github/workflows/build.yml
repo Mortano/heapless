@@ -113,7 +113,7 @@ jobs:
         with:
           components: clippy
           targets: i686-unknown-linux-musl
-      - run: cargo clippy --all --target i686-unknown-linux-musl --all-targets
+      - run: cargo clippy --all --target i686-unknown-linux-musl --all-targets -- -Dclippy::undocumented_unsafe_blocks
 
   # Compilation check
   check:
