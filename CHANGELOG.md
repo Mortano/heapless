@@ -14,12 +14,19 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Implement `TryFrom` for `Deque` from array.
 - Switch from `serde` to `serde_core` for enabling faster compilations.
 - Implement `Zeroize` trait for all data structures with the `zeroize` feature to securely clear sensitive data from memory.
+- Added `truncate` to `Deque`
+- Added `retain` to `Deque`
+- Added `retain_mut` to `Deque`
 
 ## [v0.9.1] - 2025-08-19
 
 ### Added
 
 - Added `String::insert` and `String::insert_str`.
+
+### Added
+
+- Added optional `embedded_io::Write` impl for `Vec`.
 
 ### Changed
 
