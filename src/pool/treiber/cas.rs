@@ -214,6 +214,9 @@ where
 {
     loop {
         if let Some(mut top) = stack.top.load(Ordering::Acquire) {
+            // SAFETY: Stack top points to a node. That the node is valid for conversion to a reference is something
+            //         that the callers of `push` have to guarantee, so at this point we can assume it is safe to convert
+            //         to a reference and call `as_ref`
             let next = unsafe { top.non_null().as_ref().next().load(Ordering::Relaxed) };
 
             if stack
