@@ -274,7 +274,7 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
             (&[], &[])
         } else if self.back <= self.front {
             // We have elements at the front and at the back
-            // SAFETY: 
+            // SAFETY:
             // `ptr.add`: `self.front` is always less than the capacity of the storage, so the computed pointer stays within
             //            the bounds of the allocation (`self.buffer`). This is safe
             // `from_raw_parts`: The resulting pointer is within the buffer, and the length will be <= `self.storage_capacity`,
@@ -912,6 +912,8 @@ impl<T, S: VecStorage<T> + ?Sized> DequeInner<T, S> {
 
         impl<'a, T> Drop for Dropper<'a, T> {
             fn drop(&mut self) {
+                // Safety: The slice contains properly initialized element due to the way the
+                //         Dropper type is created, therefore it is safe to drop these elements
                 unsafe {
                     ptr::drop_in_place(self.0);
                 }

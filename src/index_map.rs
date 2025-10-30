@@ -678,9 +678,7 @@ where
                 Insert::Success(inserted) => {
                     // SAFETY: Already checked existence at instantiation and the only mutable reference
                     //         to the map is internally held.
-                    unsafe {
-                        Ok(&mut (*self.core.entries.as_mut_ptr().add(inserted.index)).value)
-                    }
+                    unsafe { Ok(&mut (*self.core.entries.as_mut_ptr().add(inserted.index)).value) }
                 }
                 Insert::Full((_, v)) => Err(v),
             }

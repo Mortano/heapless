@@ -241,13 +241,13 @@ impl<T, S: Storage> QueueInner<T, S> {
     /// Returns back the `item` if the queue is full.
     #[inline]
     pub fn enqueue(&mut self, item: T) -> Result<(), T> {
-        unsafe { self.inner_enqueue(item) }
+        self.inner_enqueue(item)
     }
 
     /// Returns the item in the front of the queue, or `None` if the queue is empty.
     #[inline]
     pub fn dequeue(&mut self) -> Option<T> {
-        unsafe { self.inner_dequeue() }
+        self.inner_dequeue()
     }
 
     /// Returns a reference to the item in the front of the queue without dequeuing it, or
@@ -270,6 +270,7 @@ impl<T, S: Storage> QueueInner<T, S> {
             None
         } else {
             let head = self.head.load(Ordering::Relaxed);
+            // SAFETY: Since this queue is not empty, `head` points to a valid element
             Some(unsafe { &*(self.buffer.borrow().get_unchecked(head).get() as *const T) })
         }
     }
@@ -278,14 +279,22 @@ impl<T, S: Storage> QueueInner<T, S> {
     //
     // NOTE: This internal function uses internal mutability to allow the [`Producer`] to enqueue
     // items without doing pointer arithmetic and accessing internal fields of this type.
-    unsafe fn inner_enqueue(&self, val: T) -> Result<(), T> {
+    fn inner_enqueue(&self, val: T) -> Result<(), T> {
         let current_tail = self.tail.load(Ordering::Relaxed);
         let next_tail = self.increment(current_tail);
 
         if next_tail == self.head.load(Ordering::Acquire) {
             Err(val)
         } else {
-            (self.buffer.borrow().get_unchecked(current_tail).get()).write(MaybeUninit::new(val));
+            // SAFETY:
+            // - `current_tail` will never be out of bounds, so `get_unchecked` is safe
+            // - The pointer obtained from it for `write` is always valid for writing since
+            //   it comes from an `UnsafeCell<MaybeUninit<T>>` in a slot that is only accessible
+            //   by us right now
+            unsafe {
+                (self.buffer.borrow().get_unchecked(current_tail).get())
+                    .write(MaybeUninit::new(val));
+            }
             self.tail.store(next_tail, Ordering::Release);
 
             Ok(())
@@ -320,13 +329,21 @@ impl<T, S: Storage> QueueInner<T, S> {
     //
     // NOTE: This internal function uses internal mutability to allow the [`Consumer`] to dequeue
     // items without doing pointer arithmetic and accessing internal fields of this type.
-    unsafe fn inner_dequeue(&self) -> Option<T> {
+    fn inner_dequeue(&self) -> Option<T> {
         let current_head = self.head.load(Ordering::Relaxed);
 
         if current_head == self.tail.load(Ordering::Acquire) {
             None
         } else {
-            let v = (self.buffer.borrow().get_unchecked(current_head).get() as *const T).read();
+            // SAFETY:
+            // - `current_head` will never be out of bounds, so `get_unchecked` is safe
+            // - The pointer obtained from it for `read` is always valid for reading since
+            //   it comes from an `UnsafeCell<MaybeUninit<T>>` in a slot that is only accessible
+            //   by us right now. It is also properly initialized because otherwise the check for
+            //   current_head == tail would have triggered
+            let v = unsafe {
+                (self.buffer.borrow().get_unchecked(current_head).get() as *const T).read()
+            };
 
             self.head
                 .store(self.increment(current_head), Ordering::Release);
@@ -626,6 +643,8 @@ impl<'a, T> Iterator for Iter<'a, T> {
             let i = (head + self.index) % self.rb.n();
             self.index += 1;
 
+            // SAFETY: `i` will always be in bounds and since there are `len` elements between the head
+            //         and tail, it also points to a valid element
             Some(unsafe { &*(self.rb.buffer.borrow().get_unchecked(i).get() as *const T) })
         } else {
             None
@@ -643,6 +662,8 @@ impl<'a, T> Iterator for IterMut<'a, T> {
             let i = (head + self.index) % self.rb.n();
             self.index += 1;
 
+            // SAFETY: `i` will always be in bounds and since there are `len` elements between the head
+            //         and tail, it also points to a valid element
             Some(unsafe { &mut *self.rb.buffer.borrow().get_unchecked(i).get().cast::<T>() })
         } else {
             None
@@ -658,6 +679,8 @@ impl<T> DoubleEndedIterator for Iter<'_, T> {
             // self.len > 0, since it's larger than self.index > 0
             let i = (head + self.len - 1) % self.rb.n();
             self.len -= 1;
+            // SAFETY: `i` will always be in bounds and since there are `len` elements between the head
+            //         and tail, it also points to a valid element
             Some(unsafe { &*(self.rb.buffer.borrow().get_unchecked(i).get() as *const T) })
         } else {
             None
@@ -673,6 +696,8 @@ impl<T> DoubleEndedIterator for IterMut<'_, T> {
             // self.len > 0, since it's larger than self.index > 0
             let i = (head + self.len - 1) % self.rb.n();
             self.len -= 1;
+            // SAFETY: `i` will always be in bounds and since there are `len` elements between the head
+            //         and tail, it also points to a valid element
             Some(unsafe { &mut *self.rb.buffer.borrow().get_unchecked(i).get().cast::<T>() })
         } else {
             None
@@ -683,6 +708,7 @@ impl<T> DoubleEndedIterator for IterMut<'_, T> {
 impl<T, S: Storage> Drop for QueueInner<T, S> {
     fn drop(&mut self) {
         for item in self {
+            // SAFETY: `item` is a reference to an initialized element in the queue, so it is safe to drop
             unsafe {
                 ptr::drop_in_place(item);
             }
@@ -738,6 +764,8 @@ pub struct Consumer<'a, T> {
     rb: &'a QueueView<T>,
 }
 
+// SAFETY: We can only safely send a `Consumer` to another thread if `T` is also safe to be sent
+//         to another thread, as the SPSC queue can be used to send data between threads
 unsafe impl<T> Send for Consumer<'_, T> where T: Send {}
 
 /// A producer; it can enqueue items into the queue.
@@ -747,13 +775,15 @@ pub struct Producer<'a, T> {
     rb: &'a QueueView<T>,
 }
 
+// SAFETY: We can only safely send a `Producer` to another thread if `T` is also safe to be sent
+//         to another thread, as the SPSC queue can be used to send data between threads
 unsafe impl<T> Send for Producer<'_, T> where T: Send {}
 
 impl<T> Consumer<'_, T> {
     /// Returns the item in the front of the queue, or `None` if the queue is empty.
     #[inline]
     pub fn dequeue(&mut self) -> Option<T> {
-        unsafe { self.rb.inner_dequeue() }
+        self.rb.inner_dequeue()
     }
 
     /// Returns the item in the front of the queue, without checking if there are elements in the
@@ -828,7 +858,7 @@ impl<T> Producer<'_, T> {
     /// Adds an `item` to the end of the queue, returns back the `item` if the queue is full.
     #[inline]
     pub fn enqueue(&mut self, item: T) -> Result<(), T> {
-        unsafe { self.rb.inner_enqueue(item) }
+        self.rb.inner_enqueue(item)
     }
 
     /// Adds an `item` to the end of the queue, without checking if the queue is full.
@@ -1019,6 +1049,9 @@ mod tests {
         struct Droppable;
         impl Droppable {
             fn new() -> Self {
+                // SAFETY: `COUNT` is a function-local static, so it will only be accessed from types
+                //         within this function. Since every access to `COUNT` is localized and no references
+                //         are stored, this operation is safe
                 unsafe {
                     COUNT += 1;
                 }
@@ -1028,6 +1061,9 @@ mod tests {
 
         impl Drop for Droppable {
             fn drop(&mut self) {
+                // SAFETY: `COUNT` is a function-local static, so it will only be accessed from types
+                //         within this function. Since every access to `COUNT` is localized and no references
+                //         are stored, this operation is safe
                 unsafe {
                     COUNT -= 1;
                 }
@@ -1043,6 +1079,9 @@ mod tests {
             v.dequeue().unwrap();
         }
 
+        // SAFETY: `COUNT` is a function-local static, so it will only be accessed from types
+        //         within this function. Since every access to `COUNT` is localized and no references
+        //         are stored, this operation is safe
         assert_eq!(unsafe { COUNT }, 0);
 
         {
@@ -1051,6 +1090,9 @@ mod tests {
             v.enqueue(Droppable::new()).ok().unwrap();
         }
 
+        // SAFETY: `COUNT` is a function-local static, so it will only be accessed from types
+        //         within this function. Since every access to `COUNT` is localized and no references
+        //         are stored, this operation is safe
         assert_eq!(unsafe { COUNT }, 0);
     }
 
