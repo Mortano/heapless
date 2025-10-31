@@ -709,11 +709,16 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
         debug_assert!(!self.is_empty());
 
         self.len -= LenT::one();
-        self.buffer
-            .borrow_mut()
-            .get_unchecked_mut(self.len.into_usize())
-            .as_ptr()
-            .read()
+        // SAFETY: Function contract states that there must be at least one element, so len - 1
+        //         points to a valid element for `get_unchecked_mut`. This also makes the `read`
+        //         on the pointer safe
+        unsafe {
+            self.buffer
+                .borrow_mut()
+                .get_unchecked_mut(self.len.into_usize())
+                .as_ptr()
+                .read()
+        }
     }
 
     /// Appends an `item` to the back of the collection
@@ -726,10 +731,14 @@ impl<T, LenT: LenType, S: VecStorage<T> + ?Sized> VecInner<T, LenT, S> {
         // use `ptr::write` to avoid running `T`'s destructor on the uninitialized memory
         debug_assert!(!self.is_full());
 
-        *self
-            .buffer
-            .borrow_mut()
-            .get_unchecked_mut(self.len.into_usize()) = MaybeUninit::new(item);
+        // SAFETY: The function contract states that the vector must not be full, so it is safe
+        //         to access at `self.len`
+        unsafe {
+            *self
+                .buffer
+                .borrow_mut()
+                .get_unchecked_mut(self.len.into_usize()) = MaybeUninit::new(item);
+        }
 
         self.len += LenT::one();
     }

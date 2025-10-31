@@ -143,7 +143,8 @@
     clippy::ref_as_ptr,
     clippy::doc_markdown,
     clippy::semicolon_if_nothing_returned,
-    clippy::if_not_else
+    clippy::if_not_else,
+    unsafe_op_in_unsafe_fn
 )]
 
 #[cfg(feature = "alloc")]
